@@ -1,0 +1,22 @@
+# Project Setup Instructions
+
+## Requirements
+- Python 3.8+
+- CUDA-enabled GPU (Recommended)
+- Linux/Windows/MacOS
+
+## Installation
+1. Create virtual environment:
+```bash
+python -m venv venv
+source venv/bin/activate  # Linux/Mac
+venv\Scripts\activate  # Windows
+
+## Install dependencies
+pip install -r requirements.txt
+
+## Install clip
+pip install git+https://github.com/openai/CLIP.git
+
+## Run the inference code
+python Models/run_model.py
