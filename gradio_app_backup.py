@@ -1,8 +1,6 @@
 # Standard library imports
 import os
 import tempfile
-import zipfile
-import uuid
 from pathlib import Path
 
 # Third-party imports
@@ -15,8 +13,6 @@ from phase_2.run_model import ImprovedImageVariationGenerator
 
 # Initialize the generator
 generator = ImprovedImageVariationGenerator()
-# Flag to control generation process
-generation_should_stop = False
 
 def analyze_on_upload(image):
     """Analyze uploaded image and provide parameter suggestions."""
@@ -64,11 +60,6 @@ def analyze_on_upload(image):
 
 def generate_single_variation(image, params, variation_index, use_suggested=True, user_prompt=""):
     """Generate a single variation with custom parameters and prompt."""
-    global generation_should_stop
-    
-    if generation_should_stop:
-        return None
-        
     try:
         with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as temp_file:
             input_path = temp_file.name
@@ -103,42 +94,9 @@ def generate_single_variation(image, params, variation_index, use_suggested=True
         if os.path.exists(input_path):
             os.unlink(input_path)
 
-def create_zip_file(variations):
-    """Create a ZIP file containing all generated variations."""
-    if not variations:
-        return None
-        
-    # Create a unique filename for the zip
-    zip_filename = os.path.join(tempfile.gettempdir(), f"pattern_variations_{uuid.uuid4().hex}.zip")
-    
-    with zipfile.ZipFile(zip_filename, 'w') as zipf:
-        for i, variation in enumerate(variations):
-            if isinstance(variation, tuple):
-                variation_img = variation[0]
-            else:
-                variation_img = variation
-                
-            # Convert numpy array to PIL Image
-            if isinstance(variation_img, np.ndarray):
-                img = Image.fromarray(variation_img)
-            else:
-                img = variation_img
-                
-            # Save image to temporary file
-            temp_img_path = os.path.join(tempfile.gettempdir(), f"variation_{i+1}.png")
-            img.save(temp_img_path)
-            
-            # Add to zip
-            zipf.write(temp_img_path, f"variation_{i+1}.png")
-            
-            # Remove temporary file
-            os.unlink(temp_img_path)
-            
-    return zip_filename
+# ...existing code...
 
 def create_interface():
-    global generation_should_stop
-    
     with gr.Blocks(css="""
         .spinner {
             width: 40px;
@@ -159,125 +117,61 @@ def create_interface():
             align-items: center;
             margin-top: 10px;
         }
-        .container {
-            display: flex;
-            flex-direction: column;
-            gap: 16px;
-        }
-        .header {
-            background: linear-gradient(90deg, #4b6cb7 0%, #182848 100%);
-            color: white;
-            padding: 15px;
-            border-radius: 10px;
-            margin-bottom: 20px;
-            text-align: center;
-            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
-        }
-        .parameters-box {
-            background-color: #f7f7f7;
-            padding: 15px;
-            border-radius: 10px;
-            border: 1px solid #ddd;
-            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
-        }
     """) as demo:
-        gr.Markdown(
-            "# Pattern Variation Generator", 
-            elem_classes=["header"]
-        )
+        gr.Markdown("# Pattern Variation Generator")
         
-        # Store parameters and variation data in state
+        # Store parameters in state
         suggested_params = gr.State({})
         current_params = gr.State({
             'strength': 0.61,
             'guidance_scale': 6.5,
             'num_inference_steps': 25
         })
-        generated_variations = gr.State([])
         
-        with gr.Row(equal_height=True):
-            # Left column - Input
+        with gr.Row():
             with gr.Column(scale=1):
-                input_image = gr.Image(
-                    label="Upload Pattern Image", 
-                    type="pil",
-                    elem_id="input-image"
-                )
-                
-                with gr.Column(elem_classes=["parameters-box"]):
-                    gr.Markdown("### Parameters")
-                    use_suggested = gr.Checkbox(
-                        label="Use Suggested Parameters", 
-                        value=True
-                    )
-                    
-                    with gr.Row():
-                        with gr.Column():
-                            strength_slider = gr.Slider(
-                                minimum=0.1, maximum=0.9, value=0.61, step=0.05,
-                                label="Strength (Higher values create more varied results)"
-                            )
-                            guidance_slider = gr.Slider(
-                                minimum=1.0, maximum=20.0, value=6.5, step=0.5,
-                                label="Guidance Scale"
-                            )
-                        with gr.Column():
-                            steps_slider = gr.Slider(
-                                minimum=5, maximum=50, value=25, step=5,
-                                label="Inference Steps"
-                            )
-                            variations_slider = gr.Slider(
-                                minimum=1, maximum=10, value=5, step=1,
-                                label="Number of Variations"
-                            )
-                
-                with gr.Row():
-                    generate_btn = gr.Button("Generate Variations", variant="primary")
-                    cancel_btn = gr.Button("Cancel Generation", variant="secondary")
-                    download_btn = gr.Button("Download All Variations", variant="secondary")
+                input_image = gr.Image(label="Upload Pattern Image", type="pil")
+                analysis_text = gr.Textbox(label="Analysis Results", lines=8, interactive=False)
+                user_prompt = gr.Textbox(label="Additional Prompt (optional)", lines=2)
             
-            # Right column - Output and Analysis
             with gr.Column(scale=2):
                 gallery = gr.Gallery(
                     label="Generated Variations",
                     show_label=True,
                     columns=3,
                     rows=2,
-                    height=400,
+                    height=500,
                     object_fit="contain",
                     preview=True
                 )
-                
-                with gr.Row():
-                    with gr.Column():
-                        analysis_text = gr.Textbox(
-                            label="Analysis Results", 
-                            lines=6, 
-                            interactive=False
-                        )
-                    with gr.Column():
-                        user_prompt = gr.Textbox(
-                            label="Additional Prompt (optional)", 
-                            lines=6,
-                            placeholder="Describe additional characteristics you'd like to see in the variations..."
-                        )
-                
-                # Progress display
-                with gr.Row():
-                    loading_icon = gr.HTML(
-                        "<div class='spinner'></div>", 
-                        visible=False
-                    )
-                    progress = gr.Textbox(
-                        label="Progress", 
-                        interactive=False
-                    )
-                
-                # Hidden component for file downloads
-                download_file = gr.File(
-                    label="Download Variations", 
-                    visible=False
+            use_suggested = gr.Checkbox(label="Use Suggested Parameters", value=True)
+            
+        with gr.Row():
+            with gr.Column():
+                strength_slider = gr.Slider(
+                    minimum=0.1, maximum=0.9, value=0.61, step=0.05,
+                    label="Strength (Higher values create more varied results)"
                 )
+                guidance_slider = gr.Slider(
+                    minimum=1.0, maximum=20.0, value=6.5, step=0.5,
+                    label="Guidance Scale"
+                )
+                steps_slider = gr.Slider(
+                    minimum=5, maximum=50, value=25, step=5,
+                    label="Inference Steps"
+                )
+                variations_slider = gr.Slider(
+                    minimum=1, maximum=10, value=5, step=1,
+                    label="Number of Variations"
+                )
+        
+        with gr.Row():
+            generate_btn = gr.Button("Generate Variations", variant="primary")
+            cancel_btn = gr.Button("Cancel Generation")
+        
+        # Define loading icon
+        loading_icon = gr.HTML("<div class='spinner'></div>")
+        progress = gr.Textbox(label="Progress", interactive=False)
         
         # Event handlers
         def on_upload(image, current):
@@ -350,22 +244,15 @@ def create_interface():
             image, use_suggested, suggested_params, current_params,
             strength, guidance, steps, num_variations, user_prompt
         ):
-            global generation_should_stop
-            generation_should_stop = False
-            
             if image is None:
-                return [], [], gr.update(visible=False), "Please upload an image first"
+                return None, gr.update(visible=False), "Please upload an image first"
             
             params = suggested_params if use_suggested else current_params
             variations = []
             
-            yield variations, variations, gr.update(visible=True), "Starting generation..."
+            yield variations, gr.update(visible=True), "Starting generation..."
             
             for i in range(num_variations):
-                if generation_should_stop:
-                    yield variations, variations, gr.update(visible=False), "Generation cancelled"
-                    break
-                    
                 result = generate_single_variation(
                     image, params, i,
                     use_suggested=use_suggested,
@@ -375,13 +262,11 @@ def create_interface():
                     variations.append(result)
                     yield (
                         variations, 
-                        variations,
                         gr.update(visible=True if i < num_variations - 1 else False),
                         f"Generated {i + 1}/{num_variations} variations"
                     )
             
-            if not generation_should_stop:
-                yield variations, variations, gr.update(visible=False), "Generation complete!"
+            yield variations, gr.update(visible=False), "Generation complete!"
         
         generate_btn.click(
             generate_with_progress,
@@ -390,39 +275,19 @@ def create_interface():
                 strength_slider, guidance_slider, steps_slider,
                 variations_slider, user_prompt
             ],
-            outputs=[gallery, generated_variations, loading_icon, progress]
+            outputs=[gallery, loading_icon, progress]
         )
         
         # Cancel button logic
         def cancel_generation():
-            global generation_should_stop
-            generation_should_stop = True
-            return gr.update(visible=False), "Generation cancelled"
+            # Implement cancellation logic here if needed
+            return "Generation cancelled"
         
-        cancel_btn.click(
-            cancel_generation,
-            outputs=[loading_icon, progress]
-        )
-        
-        # Download button logic
-        def prepare_download(variations):
-            if not variations:
-                return None, "No variations to download"
-                
-            try:
-                zip_path = create_zip_file(variations)
-                return zip_path, "Download ready"
-            except Exception as e:
-                return None, f"Error creating download: {str(e)}"
-        
-        download_btn.click(
-            prepare_download,
-            inputs=[generated_variations],
-            outputs=[download_file, progress]
-        )
+        cancel_btn.click(lambda: "Generation cancelled", outputs=[progress])
     
     return demo
 
 if __name__ == "__main__":
     demo = create_interface()
     demo.queue().launch(share=True)
+   
