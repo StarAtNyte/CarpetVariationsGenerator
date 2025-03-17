@@ -1,6 +1,7 @@
 # Standard library imports
 import os
 import tempfile
+import time
 from pathlib import Path
 
 # Third-party imports
@@ -19,14 +20,19 @@ def analyze_on_upload(image):
     if image is None:
         return {}, ""
     
-    with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as temp_file:
+    temp_file = None
+    try:
+        # Create temp file but don't close it yet
+        temp_file = tempfile.NamedTemporaryFile(suffix='.png', delete=False)
         input_path = temp_file.name
+        # Close the file handle explicitly before saving to it
+        temp_file.close()
+        
         if isinstance(image, np.ndarray):
             Image.fromarray(image).save(input_path)
         else:
             image.save(input_path)
 
-    try:
         # Use the enhanced analyzer from phase-2
         analysis_results = generator.analyze_image(input_path)
         complexity_analysis = analysis_results['grouped_chars'].get('complexity', {})
@@ -55,15 +61,22 @@ def analyze_on_upload(image):
     except Exception as e:
         return {}, f"Error in analysis: {str(e)}"
     finally:
-        if os.path.exists(input_path):
-            os.unlink(input_path)
+        # Safe file deletion with retry
+        if input_path and os.path.exists(input_path):
+            try:
+                os.unlink(input_path)
+            except PermissionError:
+                # If file is still in use, we'll leave it for garbage collection
+                pass
 
 def generate_single_variation(image, params, variation_index, use_suggested=True, user_prompt=""):
     """Generate a single variation with custom parameters and prompt."""
-    temp_file = None
+    input_path = None
     try:
-        temp_file = tempfile.NamedTemporaryFile(suffix='.png', delete=False)
-        input_path = temp_file.name
+        # Create temporary file for input
+        fd, input_path = tempfile.mkstemp(suffix='.png')
+        os.close(fd)  # Close file descriptor immediately
+        
         if isinstance(image, np.ndarray):
             Image.fromarray(image).save(input_path)
         else:
@@ -74,6 +87,11 @@ def generate_single_variation(image, params, variation_index, use_suggested=True
         guidance_scale = None if use_suggested else params.get('guidance_scale')
         num_inference_steps = None if use_suggested else params.get('num_inference_steps')
         
+        # Check if the prompt is too long and truncate if necessary
+        if user_prompt and len(user_prompt) > 70:  # Limit to avoid CLIP truncation issues
+            user_prompt = user_prompt[:70] + "..."
+        
+        # Generate variation
         variation = generator.generate_variations(
             input_path,
             output_dir=str(Path(tempfile.gettempdir())),
@@ -85,8 +103,8 @@ def generate_single_variation(image, params, variation_index, use_suggested=True
             user_prompt=user_prompt
         )[0]
         
-        # Save the generated image as PNG
-        output_path = os.path.join(tempfile.gettempdir(), f"variation_{variation_index}.png")
+        # Create a unique filename for the output that won't conflict
+        output_path = os.path.join(tempfile.gettempdir(), f"variation_{variation_index}_{int(time.time())}.png")
         variation.save(output_path, format="PNG")
         
         # Return the saved image path
@@ -96,8 +114,13 @@ def generate_single_variation(image, params, variation_index, use_suggested=True
         print(f"Error generating variation {variation_index}: {str(e)}")
         return None, None
     finally:
-        if temp_file and os.path.exists(temp_file.name):
-            os.unlink(temp_file.name)
+        # Safe file deletion with retry
+        if input_path and os.path.exists(input_path):
+            try:
+                os.unlink(input_path)
+            except PermissionError:
+                # If file is still in use, we'll leave it for garbage collection
+                pass
 
 def create_interface():
     with gr.Blocks(css="""
@@ -119,6 +142,11 @@ def create_interface():
             flex-direction: column;
             align-items: center;
             margin-top: 10px;
+        }
+        .warning-text {
+            color: #ff6b6b;
+            font-size: 0.9em;
+            margin-top: 5px;
         }
     """) as demo:
         gr.Markdown("# Pattern Variation Generator")
@@ -158,7 +186,11 @@ def create_interface():
             with gr.Column(scale=1):
                 use_suggested = gr.Checkbox(label="Use Suggested Parameters", value=True)
                 analysis_text = gr.Textbox(label="Analysis Results", lines=6, interactive=False)
-                user_prompt = gr.Textbox(label="Additional Prompt (optional)", lines=2)
+                user_prompt = gr.Textbox(label="Additional Prompt (optional)", lines=2, max_lines=3)
+                prompt_warning = gr.HTML(
+                    "<div class='warning-text'>Note: Very long prompts may be truncated</div>",
+                    visible=True
+                )
             
         with gr.Row():
             with gr.Column():
@@ -308,8 +340,16 @@ def create_interface():
                         paths,
                         gr.update(visible=True)
                     )
+                else:
+                    yield (
+                        variations,
+                        gr.update(visible=False),
+                        f"Error generating variation {i+1}. Skipping...",
+                        paths,
+                        gr.update(visible=len(paths) > 0)
+                    )
             
-            yield variations, gr.update(visible=False), "Generation complete!", paths, gr.update(visible=True)
+            yield variations, gr.update(visible=False), "Generation complete!", paths, gr.update(visible=len(paths) > 0)
         
         generate_btn.click(
             generate_with_progress,
